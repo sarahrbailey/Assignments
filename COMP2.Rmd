@@ -1,0 +1,420 @@
+---
+title: "Stat 853 Homework Two"
+author: "Sarah Bailey & Maude Lachaine"
+date: '2017-03-02'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=50),tidy=TRUE)
+```
+
+### I.1
+
+When we attempt to compute the least squares estimate, we get the following error: 
+
+```{r, pack, include=FALSE}
+rm(list=ls())
+
+if(!require(MASS)){
+    install.packages("MASS")
+    library(MASS)
+}
+
+if(!require(ggplot2)){
+    install.packages("ggplot2")
+    library(ggplot2)
+}
+
+if(!require(gridExtra)){
+    install.packages("gridExtra")
+    library(gridExtra)
+}
+```
+
+```{r I1, echo=FALSE, error=TRUE}
+set.seed(1)
+n=100
+x=runif(n)
+y=2*x+rnorm(n) #generates response vector y
+x2=x+100
+X=cbind(1,x,x2)
+        # try chol again
+b <- try(beta.hat<-solve(t(X)%*%X,t(X)%*%y), silent = FALSE)
+message(geterrmessage())
+
+# beta.hat<-solve(t(X)%*%X,t(X)%*%y)
+```
+The matrix is not invertible due to floating point representation on the computer. Checking the eigenvalues of $X^TX$, we can see that one of the values is $3.71e-14$, very close to zero. Hence, there is numerical underflow and `R` cannot invert the matrix. 
+
+
+
+### I.2
+We begin by obtaining the full SVD of X:
+
+```{r, I2, echo=TRUE}
+
+# singular values of X -> sqrt of the non-zero eigenvalues of t(X)%*%X
+svd_decomp<-svd(X,nu=nrow(X),nv=ncol(X)) #Full SVD
+
+# third value is much closer to zero than others
+(singular_vals <- svd_decomp$d)
+
+```
+
+ We see above that the first three singular values are $1.005e+3$, $2.649$, and $5.823e-16$. The third singular value is very close to zero. We can set the third singular value to $0$ and construct the thin SVD.
+ 
+```{r, echo=TRUE}
+
+sigma_mat <- diag(singular_vals)
+
+u <- svd_decomp$u #Full U
+v <- svd_decomp$v #Full V
+
+# set third value to zero
+singular_vals[3] <- 0
+
+sigma_mat_thin <- diag(singular_vals)
+
+# reducing dimensions using the rank of sigma 
+sigma_mat_thin <- diag(singular_vals, qr(sigma_mat_thin)$rank)
+u_thin <- u[,1:qr(sigma_mat_thin)$rank]
+v_thin <- v[,1:qr(sigma_mat_thin)$rank]
+
+
+```
+
+### I.3
+We get the Moore-Penrose inverse of $X$ using the thin SVD with $V_r \Sigma_r U_r$. Below are the coefficients for the estimates $\tilde{\beta}=X^{-1}y$ and `lm=(y~x+x2)`. 
+
+```{r, I3}
+pseudo_inv <- v_thin%*%solve(sigma_mat_thin)%*%t(u_thin) 
+
+pseudo_beta <- pseudo_inv%*%y
+
+lin_mod <- lm(y~x+x2)$coefficients
+
+```
+`lm()` coefficients:
+
+```{r print_lm, echo=FALSE}
+lin_mod
+
+```
+Moore-Penrose coefficients:
+
+```{r print_mp, echo=FALSE}
+pseudo_beta
+
+```
+The coefficient $\hat{\beta_1}$ for the linear regression fit is very similar to the Moore-Penrose approximation, differing by $.007814$. The difference in the intercept $\hat{\beta_0}$ is larger, possibly due to Moore-Penrose including $\hat{\beta_2}$.
+
+```{r, length, echo=TRUE}
+#verifying length of reduced-rank solution is less than lm() solution
+vec_len <- function(vec){
+  len <- sqrt(sum(vec^2, na.rm=TRUE))
+  return(len)
+}
+```
+The length of the reduced-rank regression solution vector is:
+
+```{r, mp_length, echo=FALSE}
+(MP.length <- vec_len(pseudo_beta))
+```
+The length of the `lm()` solution vector is:
+
+```{r, lin_length}
+(lin.length <- vec_len(lin_mod))
+```
+The difference in length between the two methods is:
+
+```{r diff, echo=FALSE}
+(d <- round(lin.length - MP.length,6))
+# difference between the length of the linear model solution vector and 
+# the reduced-rank regression solution vector
+```
+
+The length of the solution vector for $\mathbf{\hat{\beta}}$ vector for the Moore-Penrose method is smaller than that of the linear model. 
+
+### II.1
+We begin by constructing the constraint matrix. Since $\beta_1=\beta_2$, then $\beta_1-\beta_2=0$, $CC=[0,1,-1].$
+
+```{r, include=F}
+set.seed(1)
+CC<-matrix(c(0,1,-1),1,3)
+
+```
+
+### II.2
+We construct the full SVD for $CC$
+
+```{r, II2, echo=TRUE}
+
+CC.svd<-svd(CC, nu=1,nv=3)
+
+d<-CC.svd$d
+(u<-CC.svd$u)
+(v<-CC.svd$v)
+(d2<-c(d,0,0))
+
+#U \Sigma V^t = CC
+u%*%d2%*%t(v) ## Confirm SVD=CC
+```
+By multiplying $U\Sigma V^T$ in the last step above, we confirm that the full SVD does in fact equal $CC$. We can now construct $V_{\overline{r}}$
+
+```{r vbar, echo=TRUE}
+(vr.bar<-v[,2:3])
+```
+```{r, echo=TRUE}
+lm_fit<-lm.fit(X%*%vr.bar, y)
+vr.bar%*%lm_fit$coefficients #Right answer
+```
+We had set the constraint that $\hat{\beta_x}^{(eq)}=\hat{\beta_2x}^{(eq)}$ which is in fact the case. We also predicted that $\hat{\beta_x}^{(lm)}=2\hat{\beta_x}^{(eq)}$. We have $2\hat{\beta_x}^{(eq)}=2(1.156172)= 2.31234$. We look at the coefficient for $\hat{\beta_x}$ for `lm` below
+```{r, echo=FALSE} 
+lin_mod 
+``` 
+
+and see it is $2.31234$, which is what we expected. . Similarly, we predicted $\hat{\beta_0}^{(lm)}=\hat{\beta_0}^{(eq)}+100\hat{\beta_{x2}}^{(eq)}$. For the right hand side we have $-115.79648+100(1.156172)=-.17928$, which is $\hat{\beta_0}^{(lm)}$ when we round to four decimal places. Therefore the estimates agree with what we predicted. 
+
+### III.1
+
+We begin by simulating data as specified: 
+
+```{r,III1, echo=TRUE}
+set.seed(1)
+
+# number of individuals (rows)
+n_mat <- 1000
+# number of variables (columns)
+p_mat <- 100
+
+m1 <- c(1,rep(0,9),rep(0,90))
+m2 <- c(0,1,rep(0,8),rep(0,90))
+m3 <- c(rep(0,8),1,0,rep(0,90))
+m4 <- c(rep(0,9),1,rep(0,90))
+
+popms <- as.matrix(rbind(m1,m2,m3,m4))
+
+sigma <- 0.05
+cov <- sigma^2*diag(p_mat)
+
+
+X <- matrix(NA, n_mat, p_mat)
+
+# sample from a multivariate normal from each population randomly
+for(i in 1:n_mat){
+    pop <- sample(1:4, 1, replace=TRUE) # uniformly sample from 1 to 4
+    X[i,] <- mvrnorm(1, popms[pop,], cov)
+}
+
+
+```
+
+### III.2
+
+Plot of the second dimension versus the first dimension using `cmdscale`: 
+
+```{r plot1,fig.width=6,fig.height=4, echo=FALSE}
+# classical multidimesional scaling
+d<-dist(X)
+cmd<-cmdscale(d,k=2)
+
+plot_mds <- as.data.frame(cmd)
+
+# scatterplot
+ggplot(plot_mds, aes(x=V1, y=V2)) +
+    geom_point(shape=1) +     
+    ggtitle("Classical multidimensional scaling: second vs first dimension") +
+    xlab("first dimension") +
+    ylab("second dimension")
+
+```
+
+We can clearly see the clusters representing the 4 populations we sampled from.
+
+### III.3 
+
+Plot of the second principal component versus the first using `princomp`: 
+
+```{r plot2,fig.width=6,fig.height=4, echo=FALSE}
+
+pc<-princomp(X, cor=FALSE)
+
+plot_pc <- as.data.frame(pc$scores)
+ggplot(plot_pc, aes(x=Comp.1, y=Comp.2)) +
+    geom_point(shape=1) +     
+    ggtitle("Princomp: second vs first component") +
+    xlab("first component") +
+    ylab("second component")
+```
+
+This plot looks the same as the classical MDS plot, except that it is reflected on the x-axis.
+
+### III.4
+
+Plot of the second principal component versus the first using `prcomp`: 
+
+```{r, fig.width=6,fig.height=4, echo=FALSE}
+
+pc2<-prcomp(X)
+plot_pc2 <- as.data.frame(pc2$x)
+ggplot(plot_pc2, aes(x=PC1, y=PC2)) +
+    geom_point(shape=1) +     
+    ggtitle("Prcomp: second vs first component") +
+    xlab("first component") +
+    ylab("second component")
+
+```
+
+The plot with `prcomp` looks very similar to the `princomp` plot above.
+
+### III.5
+
+Suppose we want to center $X$ so that the columns all have zero mean. Therefore, we would get the variable loadings for the PC's of $X$ directly from the eigenvector matrices of its thin $SVD$, $X=U_r\Sigma_rV_r^T$, where $r=rank(X)$. In order to do this, consider $X^TX=V_r\Sigma_r^2V_r^T$, such that 
+$\Sigma_r^T=\left[\begin{array}{ccc}
+\sigma_1^2 & \cdots & 0 \\
+\hdots & \hdots & \hdots \\
+0 & \ddots  & 0 \\
+0 & 0 & \sigma_r^2
+\end{array}
+\right]$, 
+which has the same form as the spectral decomposition, $O \Lambda O^T$, of $X^TX$. We take $O=V_R$. Thus the PC scores would be $XO=XV_r=(U_r\Sigma_rV_r^T)V_r=U_r\Sigma_r$. 
+We can show this by first centering the matrix $X$ so all columns have mean zero.
+
+```{r, echo=TRUE}
+center_scale <- function(x) {
+    scale(x, scale = FALSE)
+}
+X.center <- center_scale(X) #Center Mean
+```
+
+Using this, we can construct the SVD and thin SVD:
+
+```{r, echo=TRUE}
+X.center.svd<-svd(X.center, nu=nrow(X.center),nv=ncol(X.center)) #Create SVD
+r2<-qr(X.center)$rank
+n2<-nrow(X.center)
+dr<-diag(X.center.svd$d)
+ur2<-X.center.svd$u[1:1000,1:100] #Reduced U for SVD
+dr2<-dr[1:100,1:100] #Reduced singular values
+pc2<-ur2%*%dr2
+plot_pc3 <- as.data.frame(pc2)
+```
+```{r plot3,fig.width=6.5,fig.height=4, echo=FALSE}
+ggplot(plot_pc3, aes(x=V1, y=V2)) +
+    geom_point(shape=1) +     
+    ggtitle("PC's of Eigenvector Matrices of thin SVD: second vs first component") +
+    xlab("first component") +
+    ylab("second component")
+```
+
+We see that this is almost identical to the plots from `prcomp` and `princomp` from the uncentered $X$.
+
+### III.6
+
+We know that the plots are only different up to a reflection about the x-axis (this may change for different builds of `R`). The transformation matrix for a reflection about the x-axis is:
+
+$\left[\begin{array}{cc}
+1 & 0 \\
+0 & -1\\
+\end{array}
+\right]$
+
+Thus we changed the sign of the second component.
+
+Plot using `cmdscale`, `princomp` and `prcomp`, adjusting for the change of sign in the orthonormal bases:
+
+```{r plot4,fig.width=8,fig.height=6, echo=FALSE}
+
+
+pc$scores[,2] <- -pc$scores[,2]
+pc2<-prcomp(X)
+pc2$x[,2] <- -pc2$x[,2]
+
+p1 <- as.data.frame(cmd[,1:2])
+p2 <- as.data.frame(pc$scores[,1:2])
+p3 <- as.data.frame(pc2$x[,1:2])
+
+plot1 <- ggplot(p1, aes(x=V1, y=V2)) + geom_point(shape=1) + 
+            ggtitle("Classical CMD") + xlab(1) + ylab(2)
+plot2 <- ggplot(p2, aes(x=Comp.1, y=Comp.2)) + geom_point(shape=1) +
+            ggtitle("princomp, change of sign in 2nd component") + xlab(1) + ylab(2)
+plot3 <- ggplot(p3, aes(x=PC1, y=PC2)) + geom_point(shape=1) +
+            ggtitle("prcomp, change of sign in 2nd component") + xlab(1) + ylab(2)
+
+grid.arrange(plot1, plot2, plot3, ncol = 2, nrow = 2)
+
+```
+
+### III.7
+
+Considering two functions that take a centered design matrix and return the first two principal components of X.
+
+Function 1:
+As mentioned previously, the spectral decomposition of $X^T X$ has the form $O \Lambda O^T$, or $V_r \Sigma_r^2 V_r^T$. We take $O = V_r$, and the PC scores can be computed as $X O = X V_r = (U_r \Sigma_r V_r^T)V_r = U_r \Sigma_r$. We already know that $O$ is an orthonormal matrix whose columns are eigenvectors of $X^TX$. The algorithm to compute the principal components via $X O$ is clearly reflected in function 1, since it returns the design matrix $X$ multiplied by two eigenvectors of $X^T X$ corresponding to the two largest eigenvalues of $X^T X$. 
+
+Function 2:
+Let the spectral decomposition of $X X^T$ be $\tilde{O} \Lambda \tilde{O}^T$. Because $X X^T = U_r \Sigma^2 U_r^T$, we let $\tilde{O}= U_r$. Then we can get $X O = U_r \Sigma_r = \tilde{O} \Sigma_r = \tilde{O} \Lambda^{\frac{1}{2}}$. Function 2 returns $\tilde{O}\Lambda^{\frac{1}{2}}$, where the first two eigenvectors of the spectral decomposition of $X X^T$ are the columns of the orthonormal matrix $\tilde{O}$ and the square root of the two largest eigenvalues of $X X^T$ corresponding to the eigenvectors in $\tilde{O}$ are the diagonal elements of the diagonal matrix $\Lambda^{\frac{1}{2}}$.
+
+
+
+```{r speed, echo=FALSE}
+
+f1 <- function(x){
+    X <- scale(x, center=TRUE, scale=FALSE)
+    ss <- eigen(t(X)%*%X)
+    return(X%*%ss$vectors[,1:2])
+}
+
+f2 <- function(x){
+    X <- scale(x, center=TRUE, scale=FALSE)
+    ss <- eigen(X%*%t(X))
+    return(ss$vectors[,1:2]%*%diag(sqrt(ss$values[1:2])))
+}
+```
+#### b)
+
+`f1` is closest in spirit to `princomp`. `f1`,`f2` and `princomp` calculate the PCA by spectral decomposition. `f1` and `princomp` both compute the eigenvalues and eigenvectors of the covariance matrix of $X$, $X^T X$. When $n>p$, this is the same method as function `f1`, as explained in part a). The difference is that `princomp` returns an error when $n<p$ and function `f1` still computes a result. But $X^T X$ can only be a covariance matrix of $X$ if it is positive semi-definite; when $n\geq p$.
+ 
+#### c)
+
+Here, we time our `f1` and `f2` functions and `prcomp` with $X$:
+
+```{r time_x, echo=FALSE}
+f1_x <- system.time(f1(X))[3]
+f2_x <- system.time(f2(X))[3]
+f3_x <- system.time(prcomp(X)$x[,1:2])[3]
+
+f4_x <- system.time(f1(t(X)))[3]
+f5_x <- system.time(f2(t(X)))[3]
+f6_x <- system.time(prcomp(t(X))$x[,1:2])[3]
+
+
+f1_time <- paste0("f1: ", round(f1_x, 5))
+f2_time <- paste0("f2: ", round(f2_x, 5))
+f3_time <- paste0("prcomp: ", round(f3_x, 5))
+
+
+print(f1_time)
+print(f2_time)
+print(f3_time)
+
+
+f1_time_t <- paste0("f1: ", round(f4_x, 6))
+f2_time_t <- paste0("f2: ", round(f5_x, 5))
+f3_time_t <- paste0("prcomp: ", round(f6_x, 6))
+```
+
+Clearly, `f1` is the most computationally efficient when we use $X$. This is consistent with part a), since $X$ is a data matrix with $n>p$.
+`prcomp` is not far behind, using singular value decomposition. 
+
+Now, let's time our `f1` and `f2` functions and `prcomp` with $X^T$:
+
+```{r time_tx, echo=FALSE}
+
+print(f1_time_t)
+print(f2_time_t)
+print(f3_time_t)
+
+```
+When we use $X^T$, `f2` is much faster than `f1`, as predicted in a). Interestingly, `prcomp` takes about the same time to compute whether we use $X$ or $X^T$.
