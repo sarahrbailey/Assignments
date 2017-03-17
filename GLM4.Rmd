@@ -1,0 +1,173 @@
+---
+title: "Homework Four"
+author: "Sarah Bailey"
+date: '2017-03-05'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+### 1a)
+We begin by writing the GLM. We have $Y_{ij}\sim Bernoulli(\theta_j)$ with $i=40$ trials and $j=0$ for sham and $1$ for acupuncture. Therefore $Y_{ij}$ is in the natural exponential family and by definition $Y_{ij}$'s are independent. We choose the logit link such that $g(\theta_j)=\eta_i=\log(\frac{\theta_j}{1-\theta_j})=\beta_0+\beta_1x_j$. Therefore we have a GLM.
+
+### 1b) 
+We now fit the GLM from (a) in R and conduct the lRT fo treatment effect. We do this by inputting the contingency table as bernoulli data with the first column having $1$ or $0$ for improved ($1$) and not improved ($0$) and the second column representing the treatment used with $0$ or $1$ for Sham treatment and Acupuncture respectively. We then fit the model using `glm(Improved~Treatment, family=binomial(logit))`. We calculate the LRT of the treatment by using the ANOVA function. We test the hypothesis $H_o:$ There is no association between treatment and response $H_a$ There is an association between treatment and response 
+
+```{r}
+df2<-data.frame(c(rep(1,55),rep(0,25)),c(rep(0,25),rep(1,30),rep(0,15),rep(1,10)))
+colnames(df2)<-c("Improved","Treatment")
+fit2<-glm(Improved~Treatment, family=binomial(logit),data=df2)
+#GLM Fit
+summary(fit2)
+#Anova for LRT and p-value
+anova(fit2,test="Chisq")
+```
+
+We see above that the LRT of treatment effect using glm is $1.462$ and a p-value of $.2266$. THerefore there is not enough evidence to reject the null hypothesis that there is no association between treatment and response.
+
+### 1c)
+
+To calculate the LRT of association between treatment and response using contingency methods, we use the formula $T=2\sum O_{ij}\log(\frac{O_{ij}}{E_{ij}})$. Therefore, we have
+
+```{r, echo=T}
+T<-2*sum((25*log(25/(27.5))),(30*log(30/(27.5))),(15*log(15/(12.5))),(10*log(10/12.5)))
+T
+```
+Which is the same as the deviance we got from the model. 
+
+### 1d) 
+The choice of link function will not impact the results in $b$, I tested different link functions and still got the same value for the LRT. For the case in $b$, This can also be confirmed because the likelihood will not change due to a different link function as it is dependent on the likelihood function of the bernoulli $Y_{ij}$'s, which will remain the same regardless of the link function chosen. As well, we are testing the difference in deviance (LRT for treatment), not just the deviance of the model. If we were simply testing the deviance of the model, then we would be analyzing the fit of our model and our link function would impact the results.
+
+### 1e)
+The choice of link function will impact the interpretation of the coefficients in the GLM. We can see this clearly by looking at the link function. For the logit link we have $\log(\frac{\theta_i}{1-\theta_i})=\beta_0+\beta_1 x_j$, where $\beta_1$ can be interpreted as: when going from sham to acupuncture, the odds of improvement for acupuncture increase $e^{.5878}=1.8$ times the odds of improvement for sham. Now consider the probit model, $\Phi^{-1}(\theta_i)=\beta_0+\beta_1x$. Here we interpret $\beta_1$ as the change in the $z-score$ of $Y$ with a change in treatment from sham to acupuncture. These two link functions clearly have different interpretations for the effect of treatment.
+
+### 2
+One positive of the OLS estimator, $\hat{\beta_1}$ is that it is unbiased. This is a common fact of the OLS estimator, but can be proven below. We have 
+\begin{align*}
+E(\hat{\beta})=& (X^TX)^{-1}X^Ty \\
+& = (X^TX)^{-1}X^T(X\beta) \\
+& = (X^TX)^{-1}(X^TX)\beta\\
+& = \beta.
+\end{align*}
+Thus OLS is unbiased for $\hat{\beta}=(\hat{\beta_0},\hat{\beta_1})$ and hence for $\hat{\beta_1}$. For the asymptotic efficiency of $\hat{\beta_1}$ using OLS, we note that it is not asymptotically efficient as it is not the MLE. As well, we see that the variance of $Y_i$ is dependent on $X$ and is therefore heteroscedastic. It is widely known that the OLS estimator, $\hat{\beta}$ is also heteroscedastic, therefore the estimator $\hat{\beta_1}$ not asymptotically efficient. For the GLM case, we know that the estimator $\tilde{\beta_1}$ is based on the MLE, which is asymptotically efficient. However, the GLM estimate $\tilde{\beta}$ is biased for the Poisson distribution as $\tilde{\beta_1}$ will not have a closed form. Although the Poisson GLM may be biased, the cons of the OLS described above make the GLM a better option.
+
+### 3
+We wish to derive the Pearson $\chi^2$ test statistic for testing association between $Y_i$ and $x_i$, where $\chi^2=\sum\frac{(O_{ij}-E_{ij})^2}{E_{ij}}$. Let $s$ be the total number of successes. Then $n-s$ is the total number of failures. We consider the cases for the first column, (successes, subscript $i1$) and the second column, (failures, subscript $i2$). So $E_{i1}=s/n$ and $E_{i2}=(n-s)/n.$ We have 
+\begin{align*}
+\chi^2 & =\sum \left[\frac{(O_{i1}-s/n)^2}{s/n}+\frac{(O_{i2}-(n-s)/n)^2}{(n-s)/n}\right]\\
+& = \sum \frac{O_{i1}^2-2O_{i1}s/n+s^2/n^2}{s/n}+\sum\frac{O_{i2}^2-2O_{i2}\frac{n-s}{n}+(\frac{n-s}{n})^2}{\frac{n-s}{n}} \\
+& = \frac{n}{s}\sum O_{i1}-2\sum O_{i1}+n\frac{s}{n} +\frac{n}{n-s}\sum O_{i2}-2\sum O_{i2}+n\frac{n-s}{n} \\
+& = n-2s+s+n-2(n-s)+n-s \\
+& = n.
+\end{align*}
+Where $O_{ij}^2=O_{ij}$, since the observed values of all cells will be $0$ or $1$ and $\sum O_{i1}=s$ and $\sum O_{i2}=n-s$ (the sum of the first and second columns). Thus our chi-squared test statistic is $n$, which will not give us any information about our binary data with no replicates. We also note that for the chi-squared test to be used, we require the observations to be sufficiently large, however, in the above example, this is clearly not the case as the observations will be either $1$ or $0$. 
+
+### 4
+
+We know that for $Y_i\sim binomial(n,\theta_i)$, that binomial distribution is part of the natural exponential family and tha the $Y_i$'s are independent. We show that the GLM uses the log-log link for the extreme value distribution. We have the CDF for the extreme value distribution is $F_D(d_i)=1-e^{-e^{\frac{a-d_i}{b}}}.$ Thus 
+\begin{align*}
+\theta_i & = 1-e^{-e^{\frac{a-d_i}{b}}} \\
+\log(1-\theta_i)=-e^{\frac{a-d_i}{b}} \\
+\log(-\log(1-\theta_i))=\frac{a}{b}-\frac{d_i}{b}.
+\end{align*}
+where $\beta_0=\frac{a}{b}$ and $\beta_1=\frac{-1}{b}$.
+
+### 5a)
+We begin by specifying the GLM. We have $Y_{ijkl}\sim Bernoulli(\pi_{jkl})$, where we have the $i$th subject, $j$th grade, $k$th gender, and $l$th participation level. Then the $Y_{ijkl}$'s are independent. We choose the logit link function, therefore 
+\[\log(\frac{\pi_{jkl}}{1-\pi_{jkl}})=\beta_0+\beta_1x_{i1}+\beta_2x_{i2}+\beta_3x_{i3}+\beta_4x_{i4}+\beta_5x_{ik}+\beta_6x_{il}\]
+Where $x_{i1}\cdots x_{i4}$ represent whether the $i$th subject is in the $6,8,10,12$ grade respectively. 
+
+```{r, echo=F, warning=FALSE, message=FALSE}
+library(readr)
+school <- read_delim("~/Documents/Statistics/851/Assignments/school.txt", 
+         " ", escape_double = FALSE, trim_ws = TRUE)
+school<-school[,1:4]
+school$Gender<-as.factor(school$Gender)
+school$Participate<-as.factor(school$Participate)
+school$Pass<-as.factor(school$Pass)
+school$Grade<-as.factor(school$Grade)
+```
+
+### 5b) 
+In $a$, we chose to have the grade as categorical. In terms of bias-variance tradeoff of the estimator of grade effect, if the grade variable is continuous, we would expect less variance as there are less variables in the model (1 variable) versus if grades are categorical, then there are additional variables for each grade level (3 more variables than continuous). Therefore, because of bias-variance trade-off, we would expect the bias when treating grades as continuous to be larger. Similarly, we expect the bias of grades when it is treated as a categorical variable to be less bias. We can also see the difference in this by plotting the probability of success for grades when they are treated as a categorical and a continuous variable. We can see from the plots below of the MOM estimators for the probability of success in the exam for each grade level that the continuous plot is very restricted in that you will have more bias the farther the true probabilities are from the line (as the expected value of $\hat{p}$ will consider the entire line, $bias=E(\hat{p})-p$. For the categorical plot, we have separated each grade into an additional variable, therefore by introducting more variables, we decrease the bias as the expected value of the probaility of success will be different for each grade level. Therefore there is more flexibility and thus less bias. We can also see the variation being lower in the continuous case versus higher in the categorical case. However, I think the bias  will have more impact and we should therefore treat grades as categorical. 
+
+```{r, plot1,fig.width=6,fig.height=4,echo=F}
+school8<-school[school$Grade=="8",]
+school6<-school[school$Grade=="6",]
+school10<-school[school$Grade=="10",]
+school12<-school[school$Grade=="12",]
+p<-c((62/85),(88/110),(82/128), (66/116))
+p2<-data.frame(p,c("6","8","10","12"))
+colnames(p2)<-c("Prop","Grade")
+p2$Grade<-factor(p2$Grade, levels=c("6","8","10","12"))
+p3<-data.frame(p,c(6,8,10,12))
+colnames(p3)<-c("Prop","Grade")
+library(ggplot2)
+library(gridExtra)
+plot1<-ggplot(p2, aes(x = Grade, y = Prop))  + geom_point(size=3) +ggtitle("Categorical Grade Level")
+plot2<-ggplot(p3, aes(x = Grade, y = Prop))  + geom_line()+geom_point()+ ggtitle("Continuous Grade Level")
+grid.arrange(plot1, plot2, ncol = 2, nrow = 1)
+```
+
+### 5c)
+Because all variables are categorical, we can find the deviance, however before we do that we have to check if there are duplicates. 
+
+
+
+```{r}
+glm1<-glm(Pass~Grade+Gender+Participate, family=binomial(logit), data=school)
+dups=duplicated(school[,1:3])
+numdups=sum(dups)
+#Number of duplicates
+numdups
+```
+
+We see that in fact there are a lot of duplicates. Therefore, we need to apply a different method to find the deviance than strictly getting it from the glm fit. We use the following edited code that was used in class to group duplicates together. We test $H_0$ that the proposed model fits as well as the saturated model versus $H_a$ the saturated model fits better than the proposed model.  
+
+```{r}
+n=dim(school)[1]
+school$group=rep(NA,n)
+school$group[!dups]=1:(n-numdups)
+school$predictors=apply(school[,1:3],1,FUN=function(x) {paste(x,collapse="")})
+```
+
+We can then refit our model using the pass and the group number 
+```{r}
+fit2=glm(Pass~predictors,binomial(logit),data=school)
+
+# Test the fit of the proposed model to the saturated model 
+l=glm1$deviance-fit2$deviance
+#Deviance
+l
+p=glm1$df.residual-fit2$df.residual  #df
+#p-value 
+1-pchisq(l,p) 
+```
+
+Because D is small relative to $\chi^2$ distribution and the p-value is large, we do not have sufficient evidence to reject the null hypothesis that the model fits the data well. 
+
+### 5d) 
+We conduct a hypothesis test to see the effect of grade based on the model by putting grade as the last variable in the model and then using `anova` with a chi-squared test.
+```{r, echo=F}
+fit=glm(Pass~Gender+Participate+Grade,binomial(logit),data=school)
+anova(fit,test="Chisq")
+```
+
+With a p-value of $.0008065$, we see that there is a strong grade effect. 
+
+### 5e)
+To calculate an approximate $95$% confdience interval for the effect of gender, we look at the estimated standard error and $\hat{\beta}$
+```{r}
+summary(fit)
+se<-0.2160
+bhat<-0.9308
+z<-qnorm(0.95)
+CI<-c(bhat-z*se, bhat+z*se)
+
+#Confidence Interval
+CI
+```
+
