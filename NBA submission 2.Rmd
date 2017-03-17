@@ -1,0 +1,435 @@
+---
+title: "NBA Submission File"
+author: "Sarah Bailey 301305478"
+date: "11/14/2016"
+output: 
+  html_document:
+      toc: yes
+      toc_float: yes
+      toc_depth: 4
+      collapsed: FALSE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(fields, plotrix, dplyr,plyr, glmnet,caret,forcats,xgboost, dplyr,aod,mboost,Matrix, e1071,ggplot2)
+```
+### Introduction
+The purpose of this competition was to compute the likelihood that a basketball player makes a shot. This second week, I decided to look at the player characteristics, non-linear effects, and opted for an Xgboost model over the glmnet. In the end, my best score came from using Lucas's code for his data cleaning, however, this was only better than my submission by .00064. I include both here for comparision of models.
+
+```{r eval_metric, include = F}
+eval_metric <- function(response, predicted_probs) {
+  N <- length(response)
+  logloss <- -(1/N) * sum(response * log(predicted_probs) + (1-response) * log(1 - predicted_probs))
+  logloss
+}
+
+# Function that converts factor to numeric variable
+fac_to_num <- function(fac) {
+  as.numeric(as.character(fac))
+}
+```
+
+```{r load_data, include = FALSE}
+train <- read.csv("./data/train.csv", stringsAsFactors = F)
+test <- read.csv("./data/test.csv", stringsAsFactors = F)
+players <- read.csv("./data/players.csv", stringsAsFactors = F)
+teams <- read.csv("./data/teams.csv", stringsAsFactors = F)
+```
+
+
+```{r plot_court_function, include = F}
+## draw the basketball court 
+draw.court = function() {
+  rect(0, 0, 94, 50)
+  circle = function(x, y, r, from = 0, to = 2 * pi, lines = FALSE, ...) {
+    theta = seq(from, to, length = 100)
+    if (lines)
+      lines(x + r * cos(theta), y + r * sin(theta), ...)
+    else polygon(x + r * cos(theta), y + r * sin(theta), ...)
+  }
+  points(c(5.25, 94 - 5.25), c(25, 25), cex = 2)
+  segments(47, 0, 47, 50)
+  circle(47, 25, 8)
+  circle(47, 25, 2, col = "lightgray")
+  theta1 = acos((25 - 35/12)/23.75)
+  circle(5.25, 25, 23.75, -pi/2 + theta1, pi/2 - theta1, TRUE)
+  circle(94 - 5.25, 25, 23.75, pi/2 + theta1, 3 * pi/2 - theta1, TRUE)
+  segments(0, 35/12, 5.25 + 23.75 * sin(theta1), 35/12)
+  segments(0, 50 - 35/12, 5.25 + 23.75 * sin(theta1), 50 - 35/12)
+  segments(94, 35/12, 94 - 5.25 - 23.75 * sin(theta1), 35/12)
+  segments(94, 50 - 35/12, 94 - 5.25 - 23.75 * sin(theta1), 50 - 35/12)
+  circle(19, 25, 6, -pi/2, pi/2, TRUE)
+  circle(19, 25, 6, pi/2, 3 * pi/2, TRUE, lty = 2)
+  circle(94 - 19, 25, 6, pi/2, 3 * pi/2, TRUE)
+  circle(94 - 19, 25, 6, -pi/2, pi/2, TRUE, lty = 2)
+  circle(5.25, 25, 4, -pi/2, pi/2, TRUE)
+  circle(94 - 5.25, 25, 4, pi/2, 3 * pi/2, TRUE)
+  rect(0, 17, 19, 33, border = "gray")
+  rect(94, 17, 94 - 19, 33, border = "gray")
+}
+
+# Function that plots the court
+plot_court <- function(main) {
+  plot(0,0,pch=46,xlim=c(0,94), ylim=c(0,50), main=main, xlab = '', ylab = '')
+  draw.court()
+}
+```
+
+
+```{r calc_dist, include = F}
+# X,Y coordinates for the basketball hoops
+left_hoop_xy <- cbind(5.25, 25)
+right_hoop_xy <- cbind(88.75, 25)
+
+# Function to calculate distance between shot location and hoop
+calc_shot_dist <- function(shot_data) {
+  n <- nrow(shot_data)
+  left_shot_ind <- shot_data$offense_basket == "L"
+  right_shot_ind <- shot_data$offense_basket == "R"
+  shot_dist <- numeric(n)
+  shot_dist[left_shot_ind] <- 
+    rdist(shot_data[left_shot_ind, c("shot_x", "shot_y")], left_hoop_xy)
+  shot_dist[right_shot_ind] <- 
+    rdist(shot_data[right_shot_ind, c("shot_x", "shot_y")], right_hoop_xy)
+  shot_dist
+}
+```
+
+
+```{r data_prep,cache=TRUE}
+train$shot_dist <- calc_shot_dist(train)
+test$shot_dist <- calc_shot_dist(test)
+full <- rbind(train,test)
+```
+
+### Revamped 
+The following is an edited version of Lucas/Dani
+```{r dani_code,echo=T}
+#Contested Shot, 0 for not contested, 1 for contested, 2 for Wide Open
+full$contested=0
+
+full[which(full$ndd<4),]$contested=1
+
+full[which(full$ndd>10),]$contested=2
+
+#Summarize the shot clock, missing data is becuase shot clock was turned off due to game clock having less than 24 seconds on it
+full[is.na(full$shot_shot_clock),]$shot_shot_clock=full[is.na(full$shot_shot_clock),]$shot_game_clock
+
+#if shot was taken in regular flow of offense rushed =0
+full$rushed=0
+
+#if shot clock was under 7 seconds set to 1
+full[which(full$shot_shot_clock<7),]$rushed=1
+
+#if shot clock was over 19, it was probably a fast break, and a good shot
+full[which(full$shot_shot_clock>19),]$rushed=2
+
+#was the shot a catch and shoot
+#if the shooter didnt dribble then set to 1
+full$catchnshoot=0
+
+full[which(full$dribbles==0),]$catchnshoot=1
+
+#Catch and Shoot
+full$ispasser=1
+
+full[is.na(full$passer),]$ispasser=1
+
+##Create Left Shot x and y variables for test and full
+full$LeftShotx=NA
+full$LeftShoty=NA
+
+full$LeftShotx[full$offense_basket == "L"]=(full$shot_x[which(full$offense_basket == "L")])
+full$LeftShoty[full$offense_basket == "L"]=full$shot_y[which(full$offense_basket == "L")]
+
+full$LeftShotx[full$offense_basket == "R"]=94-(full$shot_x[which(full$offense_basket == "R")])
+full$LeftShoty[(full$offense_basket == "R")]=50-(full$shot_y[which(full$offense_basket == "R")])
+
+
+## Change Foul shots that don't have the offense hoop vairable switched
+full$LeftShotx[which(full$LeftShotx>73 & full$LeftShotx<75 & full$LeftShoty>23 & full$LeftShoty<27)]=19.75
+full$LeftShoty[which(full$LeftShotx>73 & full$LeftShotx<75 & full$LeftShoty>23 & full$LeftShoty<27)]=25
+
+## Label as LayUp, BaseMid, ElbowMid, Long2, Corner3, Break3, Other, weirdxy, Foul Shots
+full$Location=NA
+
+
+full[which(full$LeftShotx>0 & full$LeftShotx<14 & full$LeftShoty<20 & full$shot_dist<19),]$Location="BaseMid"
+full[which(full$LeftShotx>0 & full$LeftShotx<14 & full$LeftShoty<47 & full$shot_dist<19 ),]$Location="BaseMid"
+
+full[which(full$shot_dist>8 & full$shot_dist<19 &full$LeftShotx>14) ,]$Location="ElbowMid"
+
+full[which(full$LeftShotx>0 & full$LeftShotx<14 & full$shot_dist>19 &full$shot_dist<22),]$Location="Long2"
+full[which(full$shot_dist>19 &full$shot_dist<23.75 &full$LeftShotx>14) ,]$Location="Long2"
+
+full[which(full$LeftShotx>0 & full$LeftShotx<14 & full$LeftShoty<3),]$Location="Corner3"
+full[which(full$LeftShotx>0 & full$LeftShotx<14 & full$LeftShoty>47 ),]$Location="Corner3"
+full[which(full$LeftShotx>0 & full$LeftShotx<14 & full$shot_dist>22 ),]$Location="Corner3"
+
+full[which(full$shot_dist<28 & full$shot_dist>23.75 &full$LeftShotx>14) ,]$Location="Break3"
+
+full[which(full$shot_dist>28 ) ,]$Location="Other"
+
+full[is.na(full$Location),]$Location="Weirdxy"
+
+full[which(full$LeftShotx<21 & full$LeftShotx>19 & full$LeftShoty>23 & full$LeftShoty<27),]$Location="FreeThrow"
+
+full[which(full$LeftShotx>0 & full$LeftShotx<14 & full$LeftShoty>20 & full$LeftShoty<30),]$Location="LayUp"
+```
+
+
+```{r data, echo=T}
+# changed the name of data
+changed_name <- function(prefix,data){
+  new_names <- rep(NA,ncol(data))
+  for (i in 1:length(names(data))){
+    new_names <- paste(prefix,names(data)[i],sep="_")
+    names(data)[i] <- new_names
+  }
+  return(data)
+}
+
+# Merged variables from player file
+shooter_merged <- players
+shooter_merged$X <- NULL
+shooter_merged <- changed_name("SH",shooter_merged)
+
+passer_merged <- players
+passer_merged$X <- NULL
+passer_merged <- changed_name("PS",passer_merged)
+
+defender_merged <- players
+defender_merged$X <- NULL
+defender_merged <- changed_name("DEF",defender_merged)
+
+### position
+full <- left_join(full,shooter_merged,by=c("shooter" = "SH_player_id"))
+full <- left_join(full,passer_merged,by=c("passer" = "PS_player_id"))
+full <- left_join(full,defender_merged,by=c("defender" = "DEF_player_id"))
+
+full$shooter_age <- full$season-full$SH_byear
+full$shooter_exp <- full$season-full$SH_rookie
+
+### free throw
+FT <- subset(full,(shot_shot_clock ==24 & (shot_dist <=17.5 & shot_dist >=13))|
+               (shot_shot_clock ==24 & (shot_dist <69 & shot_dist >=67.5)))
+
+full$free_throw <- ifelse(full$id %in% FT$id,1,0)
+
+full$dribbles <- ifelse(full$free_throw==1,1,full$dribbles)
+
+### shot clock effect
+full$shot_shot_clock[(full$shot_shot_clock)<0] <- 0
+full$shot_shot_clock[(full$shot_shot_clock)>24] <- 24
+full$shot_shot_clock[(is.na(full$shot_shot_clock))] <- mean(full$shot_shot_clock[full$shot_shot_clock<24],na.rm=T)
+full$shot_clock_group <- cut(full$shot_shot_clock , c(0,4,7,15,18,22,25), right = FALSE,dig.lab = 4)
+
+### team effect
+full$team_vs_opp <- ifelse(full$team>full$opponent,paste(full$team,"vs",full$opponent),paste(full$opponent,"vs",full$team))
+
+### dribble effect
+full$dribble_group <- cut(full$dribbles , c(0,1,2,3,6,36), right = FALSE,dig.lab = 4)
+
+full$shot_dist_group <- cut(full$shot_dist , c(0,6,10,15,19,23.74,32,100), right = FALSE,dig.lab = 4)
+
+full[is.na(full$pass_distance),]$pass_distance <- 0
+
+# change the NA to missing
+full$SH_position <- fct_explicit_na(full$SH_position,"missing")
+
+# replace NA with its mean
+NAlist <- c("ndd","SH_height","SH_weight","SH_byear","SH_rookie","shooter_age","shooter_exp")
+for(i in 1:length(NAlist)){
+  full[is.na(full[,NAlist[i]]), NAlist[i]] <- mean(full[,NAlist[i]], na.rm = TRUE)
+}
+
+```
+
+```{r matrix_prep,echo=T}
+train.exp <- full[1:nrow(train),]
+test.exp <- full[(nrow(train)+1):nrow(full),]
+
+full.m <-  full %>% dplyr::select((season),(quarter),(home),pass_distance,(shooter),shot_shot_clock,dribbles,distance_travelled,ndd,shot_dist,contested,rushed,catchnshoot,Location,SH_position,SH_height,SH_weight,shooter_age,shooter_exp,free_throw,shot_clock_group,team_vs_opp,dribble_group,shot_dist_group)
+
+# Sparse Matrix
+full.sparse <- sparse.model.matrix(~factor(season)+factor(quarter)+factor(team_vs_opp)+factor(home)+pass_distance+factor(shooter)+shot_shot_clock+dribbles+distance_travelled+ndd+shot_dist+factor(contested)+factor(rushed)+factor(catchnshoot)+factor(Location)+factor(SH_position)+SH_height+SH_weight+shooter_age+shooter_exp+factor(free_throw)+factor(shot_clock_group)+factor(team_vs_opp)+factor(dribble_group)+factor(shot_dist_group)-1,data=full.m)
+
+
+
+X <- full.sparse[1:nrow(train),]
+X_test <- full.sparse[(nrow(train)+1):nrow(full),]
+
+y <- train$made
+
+```
+
+```{r xgboost_2, include=F}
+## Xgboost model from Sunghu Code
+system.time(
+  {
+    bst <- xgboost(data = X,label=y, eval_metric ="logloss",
+                   max.depth = 4, eta = .1, nround = 750,gamma=1, #750 round takes just about 5 mins
+                   colsample_bytree = 1,min_child_weight = 95, # 95 is better than 45, 45 is better than 295
+                   nthread = 2, objective = "binary:logistic")
+    pred <- predict(bst, X_test)
+  }
+)
+
+submission_matrix <- data.frame(test.exp$id, pred)
+names(submission_matrix) = c('id', 'made')
+
+# Write submission file
+write.csv(submission_matrix, file='submission_file3.csv', row.names = FALSE)
+```
+
+```{r xgboost, eval=F}
+## Xgboost model from Sunghu Code
+system.time(
+  {
+    bst <- xgboost(data = X,label=y, eval_metric ="logloss",
+                   max.depth = 4, eta = .1, nround = 750,gamma=1, #750 round takes just about 5 mins
+                   colsample_bytree = 1,min_child_weight = 95, # 95 is better than 45, 45 is better than 295
+                   nthread = 2, objective = "binary:logistic")
+    pred <- predict(bst, X_test)
+  }
+)
+
+submission_matrix <- data.frame(test.exp$id, pred)
+names(submission_matrix) = c('id', 'made')
+
+# Write submission file
+write.csv(submission_matrix, file='submission_file3.csv', row.names = FALSE)
+```
+
+### Data Exploration and Analysis 
+The following is the second best entry, that I had more spent most of my time working on. The initial set up was the same, but I had added different variables and took non linear effects into consideration.
+
+```{r second_best, include=F}
+full2 <- rbind(train,test)
+
+library(dplyr)
+full2 <- full2 %>% left_join(players, by = c("shooter" = "player_id"))
+full2 <- full2 %>% left_join(teams, by = c("team" = "global_id"))
+full2 <- full2 %>% left_join(teams, by = c("opponent" = "global_id"))
+
+full2$LeftShotx=NA
+full2$LeftShoty=NA
+
+full2$LeftShotx[full2$offense_basket == "L"]=(full2$shot_x[which(full2$offense_basket == "L")])
+full2$LeftShoty[full2$offense_basket == "L"]=full2$shot_y[which(full2$offense_basket == "L")]
+
+full2$LeftShotx[full2$offense_basket == "R"]=94-(full2$shot_x[which(full2$offense_basket == "R")])
+full2$LeftShoty[(full2$offense_basket == "R")]=50-(full2$shot_y[which(full2$offense_basket == "R")])
+
+
+## Change Foul shots that don't have the offense hoop vairable switched
+full2$LeftShotx[which(full2$LeftShotx>73 & full2$LeftShotx<75 & full2$LeftShoty>23 & full2$LeftShoty<27)]=19.75
+full2$LeftShoty[which(full2$LeftShotx>73 & full2$LeftShotx<75 & full2$LeftShoty>23 & full2$LeftShoty<27)]=25
+
+## Label as LayUp, BaseMid, ElbowMid, Long2, Corner3, Break3, Other, weirdxy, Foul Shots
+full2$Location=NA
+
+
+full2[which(full2$LeftShotx>0 & full2$LeftShotx<14 & full2$LeftShoty<20 & full2$shot_dist<19),]$Location="BaseMid"
+full2[which(full2$LeftShotx>0 & full2$LeftShotx<14 & full2$LeftShoty<47 & full2$shot_dist<19 ),]$Location="BaseMid"
+
+full2[which(full2$shot_dist>8 & full2$shot_dist<19 &full2$LeftShotx>14) ,]$Location="ElbowMid"
+
+full2[which(full2$LeftShotx>0 & full2$LeftShotx<14 & full2$shot_dist>19 &full2$shot_dist<22),]$Location="Long2"
+full2[which(full2$shot_dist>19 &full2$shot_dist<23.75 &full2$LeftShotx>14) ,]$Location="Long2"
+
+full2[which(full2$LeftShotx>0 & full2$LeftShotx<14 & full2$LeftShoty<3),]$Location="Corner3"
+full2[which(full2$LeftShotx>0 & full2$LeftShotx<14 & full2$LeftShoty>47 ),]$Location="Corner3"
+full2[which(full2$LeftShotx>0 & full2$LeftShotx<14 & full2$shot_dist>22 ),]$Location="Corner3"
+
+full2[which(full2$shot_dist<28 & full2$shot_dist>23.75 &full2$LeftShotx>14) ,]$Location="Break3"
+
+full2[which(full2$shot_dist>28 ) ,]$Location="Other"
+
+full2[is.na(full2$Location),]$Location="Weirdxy"
+
+full2[which(full2$LeftShotx<21 & full2$LeftShotx>19 & full2$LeftShoty>23 & full2$LeftShoty<27),]$Location="FreeThrow"
+
+full2[which(full2$LeftShotx>0 & full2$LeftShotx<14 & full2$LeftShoty>20 & full2$LeftShoty<30),]$Location="LayUp"
+
+full2$Location<-as.factor(full2$Location)
+
+FT2 <- subset(full2,(shot_shot_clock ==24 & (shot_dist <=17.5 & shot_dist >=13))|
+               (shot_shot_clock ==24 & (shot_dist <69 & shot_dist >=67.5)))
+
+full2$free_throw <- ifelse(full2$id %in% FT2$id,1,0)
+```
+
+```{r Non_linear, include=T}
+#Dealing wiht nonlinear variables
+full2$shot_shot_clock<-ifelse(is.na(full2$shot_shot_clock),100, full2$shot_shot_clock)
+full2$dummy<-factor(full2$shot_shot_clock==100)
+full2$SC2<-I(full2$shot_shot_clock^2)
+full2$SC3<-I(full2$shot_shot_clock^3)
+full2$SDLong<-I(full2$shot_dist>25)
+full2$ndd<-ifelse(full2$ndd>15 | is.na(full2$ndd), 0, full2$ndd)
+full2$ndd2<-I(full2$ndd^2)
+full2$ndd3<-I(full2$ndd^3)
+
+#Binary variable to determine if player is new or not (<=3 years considered "rookie")
+is.rookie <- function(player_data) {
+x<-player_data$season-player_data$rookie
+x2<-ifelse(x<=3, 1, 0)
+x2
+}
+full2$newplayer<-is.rookie(full2)
+full2$newplayer<-ifelse(is.na(full2$newplayer),0,full2$newplayer)
+
+# Creating New test and train data
+train.exp2 <- full2[1:nrow(train),]
+test.exp2 <- full2[(nrow(train)+1):nrow(full2),]
+```
+
+### Visualizations
+Here are some graphs that give some insight into the types of variables we have and the differences between shot success for different factor level variables
+
+```{r Visual, include=T}
+#Visualizing non linear data for ndd variable
+train.exp2$ndd2 <- round(train.exp2$ndd,0)
+explore.ndd <- train.exp2 %>% dplyr::group_by(ndd2)%>% 
+  dplyr::summarise(FG_Per = mean(made))
+plot(explore.ndd[1:20,],type="l",main="FG% by ndd",xlab="ndd",ylab="FG%")
+lines(predict(loess(explore.ndd$FG_Per~explore.ndd$ndd2)), col='red', lwd=2)
+legend(x=17, y=0.38, legend=c("Original", "Smoothing"), 
+       lty="solid", col=c("black","red"))
+
+#Create a histogram that models player position, and shot distance (only consider players with >=300 shots)
+train.exp1<-subset(train.exp2, count(shooter)>=300)
+ggplot(train.exp1, aes(x = as.factor(made), y = shot_dist, fill = as.factor(made))) + geom_boxplot() +
+  facet_wrap(~ position, ncol = 5)
+```
+
+We can see that different positions have more distance range with shot success, conversely, different positions also have less success with different shot distances.
+
+### Building the Model Part Two
+
+```{r NA, include=T}
+#Getting rid of NA's in testing and training data
+train.exp2$dribbles<-ifelse(is.na(train.exp2$dribbles),mean(train.exp2$dribbles,na.rm=T),train.exp2$dribbles)
+train.exp2$ndd<-ifelse(is.na(train.exp2$ndd), mean(train.exp2$ndd,na.rm=T),train.exp2$ndd)
+train.exp2$pass_distance<-ifelse(is.na(train.exp2$pass_distance), mean(train.exp2$pass_distance, na.rm=T), train.exp2$pass_distance)
+train.exp2$passer<-ifelse(is.na(train.exp2$passer), 0, train.exp2$passer)
+train.exp2$position<-ifelse(is.na(train.exp2$position),"none", train.exp2$position)
+
+test.exp2$dribbles<-ifelse(is.na(test.exp2$dribbles),mean(test.exp2$dribbles,na.rm=T),test.exp2$dribbles)
+test.exp2$ndd<-ifelse(is.na(test.exp2$ndd), mean(test.exp2$ndd,na.rm=T),test.exp2$ndd)
+test.exp2$pass_distance<-ifelse(is.na(test.exp2$pass_distance), mean(test.exp2$pass_distance, na.rm=T), test.exp2$pass_distance)
+test.exp2$passer<-ifelse(is.na(test.exp2$passer),0,test.exp2$passer)
+test.exp2$position<-ifelse(is.na(test.exp2$position),"none", test.exp2$position)
+```
+
+```{r sparse, include=T}
+
+# The following formula was used in the second best submission
+y <- train.exp2$made
+X2<-sparse.model.matrix(~shot_dist+ team+opponent+shooter+ndd+ndd2+ndd3+shot_dist+position+ dribbles+
+                          Location+shot_shot_clock+SC2+SC3+SDLong:position+free_throw,data=train.exp2)
+
+```
